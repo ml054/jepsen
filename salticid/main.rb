@@ -5,6 +5,7 @@ load __DIR__/'mongo.rb'
 load __DIR__/'nuodb.rb'
 load __DIR__/'postgres.rb'
 load __DIR__/'redis.rb'
+load __DIR__/'rachis.rb'
 load __DIR__/'riak.rb'
 load __DIR__/'foundationdb.rb'
 
@@ -114,7 +115,7 @@ group :jepsen do
   host :n5
   
   each_host do
-    user :ubuntu
+    user :root
     role :base
     role :cassandra
     role :etcd
@@ -123,10 +124,11 @@ group :jepsen do
     role :nuodb
     role :postgres
     role :redis
+    role :rachis
     role :riak
     role :zk
     role :foundationdb
     role :jepsen
-    @password = 'ubuntu'
+    @password = 'root'
   end
 end
