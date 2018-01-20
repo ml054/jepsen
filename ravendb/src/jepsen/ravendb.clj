@@ -264,42 +264,46 @@
   ;; ex. curl -i -X PUT -d "" "http://n1:8080/admin/cluster/node?assignedCores=1&url=http://n5:8080"
   (c/exec :curl :-L :-i :-X :PUT :-o (str "/root/" node ".log") :-d "" url))
 
-(defrecord RachisClient [node]
+(defrecord RachisClient [node store]
   client/Client
 
   (open! [client test n]
-         (RachisClient. n))
+         (let [store  (DocumentStore. (into-array String [(server-url n)]) "jepsen")]
+           (.initialize store)
 
-  (setup! [this test]
-          (let [store  (DocumentStore. (into-array String [(server-url node)]) "jepsen")]
-            (.initialize store)
-
+           (meh
             (when (= node (core/primary test))
-
-              (println "About to create database record!")
-              (Thread/sleep 10000)
               (let [dbRecord (DatabaseRecord.)]
                 (.setDatabaseName dbRecord "jepsen")
                 (let [op (CreateDatabaseOperation. dbRecord)]
-                  (.send (.server (.maintenance store)) op)))))
-          (Thread/sleep 5000)
-          (println "Waiting for db to settle")
-          (Thread/sleep 5000)
-          this)
+                  (.send (.server (.maintenance store)) op))))
+            )
 
-  (invoke! [this test op])
+
+           (Thread/sleep 2000)
+           (assoc client :store store :node n)
+           )
+         )
+
+  (setup! [this test]
+          )
+
+  (invoke! [this test op]
+           (println (str "invoke!" this))
+           )
 
   (teardown! [this test]
-             (println "teardown!"))
+             (.close (:store this))
+             )
 
   (close! [client test]
-          (println "closing")))
+          ))
 
 
 (defn client
   "A client for RavenDB"
   [conn]
-  (RachisClient. conn))
+  (RachisClient. conn nil))
 
 (defn db
   "RavenDB database."
