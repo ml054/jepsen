@@ -29,8 +29,8 @@
 (def dir "/opt/ravendb")
 (def serverdir (str dir "/Server"))
 
-;;(def tarurl   "https://daily-builds.s3.amazonaws.com/RavenDB-4.0.0-nightly-20180108-1600-linux-x64.tar.bz2")
-(def tarurl "file:///root/raven.tar.bz2")
+(def tarurl   "https://daily-builds.s3.amazonaws.com/RavenDB-4.0.0-nightly-20180124-0500-linux-x64.tar.bz2")
+;;(def tarurl "file:///root/raven.tar.bz2")
 (def binary "Raven.Server")
 (def logfile (str dir "/ravendb.log"))
 (def pidfile (str dir "/ravendb.pid"))
@@ -89,13 +89,12 @@
                (warn e "Error creating database"))
              )
 
-           (println "SLEEP")
-           (Thread/sleep 20000)
            (assoc client :store store :node n)
            )
          )
 
   (setup! [this test]
+          (println "setup!")
           )
 
   (invoke! [this test op]
@@ -105,11 +104,11 @@
            (let [fail (if (= :read (:f op))
                         :fail
                         :info)]
-             (try
+             (try+
                (case (:f op)
                  :read  (let
                           [store (:store this)
-                           cmd (GetCompareExchangeValueOperation. (.getClass Integer) "jepsen")
+                           cmd (GetCompareExchangeValueOperation. Integer "jepsen")
                            result  (.send (.operations store) cmd)
                            ]
                           (assoc op :type :ok :value (.getValue result)))
@@ -117,14 +116,15 @@
                  :write (let
                           [store (:store this)
                            [k v] (:value op)
-                           cmd (PutCompareExchangeValueOperation. "jepsen" v 0)
+                           cmd (PutCompareExchangeValueOperation. "jepsen" (rand-int 5) 0)
                            result  (.send (.operations store) cmd)]
                           (assoc op :type :ok))
                  )
                (catch java.net.SocketTimeoutException e
-                 (assoc op :type fail :value :timed-out)
-                 )
+                 (assoc op :type fail :value :timed-out))
 
+              (catch net.ravendb.client.exceptions.RavenException e
+                (assoc op :type fail :value :timed-out))
                )))
 
   (teardown! [this test]
@@ -185,7 +185,8 @@
               (info node "tearing down RavenDB")
               (cu/stop-daemon! binary pidfile)
               (c/su
-               (c/exec :rm :-rf dir)))
+               (c/exec :rm :-rf dir))
+              )
 
    db/LogFiles
    (log-files [_ test node]
