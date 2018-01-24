@@ -23,7 +23,10 @@
   (:import [net.ravendb.client.documents DocumentStore]
            [net.ravendb.client.serverwide DatabaseRecord]
            [net.ravendb.client.documents.operations GetCompareExchangeValueOperation]
+           [net.ravendb.client.documents.operations.configuration GetClientConfigurationOperation]
+           [net.ravendb.client.documents.operations.configuration PutClientConfigurationOperation]
            [net.ravendb.client.documents.operations PutCompareExchangeValueOperation]
+           [net.ravendb.client.serverwide ClientConfiguration]
            [net.ravendb.client.serverwide.operations CreateDatabaseOperation]))
 
 (def dir "/opt/ravendb")
@@ -87,30 +90,41 @@
            (let [fail (if (= :read (:f op))
                         :fail
                         :info)]
-             (try+
+             (try
                (case (:f op)
                  :read  (let
                           [store (:store this)
-                           cmd (GetCompareExchangeValueOperation. Integer "jepsen")
-                           result  (.send (.operations store) cmd)
+                           cmd (GetClientConfigurationOperation.)
+                           result  (.send (.maintenance store) cmd)
+                           r (.getConfiguration result)
                            ]
 
-                          (if (nil? result)
-                            (assoc op :type :fail :value nil)
-                            (assoc op :type :ok :value (.getValue result))))
+                          (if (nil? r)
+                            (assoc op :type :fail, :value nil)
+                            ;;(assoc op :type :ok, :value (rand-int 5))
+                            (assoc op :type :ok, :value (.getMaxNumberOfRequestsPerSession r))
+                            ))
 
                  :write (let
                           [store (:store this)
                            [k v] (:value op)
-                           cmd (PutCompareExchangeValueOperation. "jepsen" v 0)
-                           result  (.send (.operations store) cmd)]
+                           conf (ClientConfiguration.)
+                           ]
+                          (.setMaxNumberOfRequestsPerSession conf v)
+
+                          (.send (.maintenance store) (PutClientConfigurationOperation. conf))
+
                           (assoc op :type :ok))
                  )
                (catch java.net.SocketTimeoutException e
-                 (assoc op :type fail :value :timed-out))
+                 (assoc op :type fail :error :timed-out))
 
-              ;;(catch net.ravendb.client.exceptions.RavenException e
-              ;;  (assoc op :type fail :value :timed-out))
+              (catch net.ravendb.client.exceptions.ConcurrencyException e
+                (assoc op :type fail :error :concurrency))
+
+              (catch Exception e
+                (assoc op :type fail :error (.getMessage e))
+                )
                )))
 
   (teardown! [this test]
