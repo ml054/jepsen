@@ -74,24 +74,7 @@
   (open! [client test n]
          (let [store  (DocumentStore. (into-array String [(server-url n)]) "jepsen")]
            (.initialize store)
-
-           (try
-             (when (= n (core/primary test))
-               (println "ABOUT TO CREATE DATABASE")
-               (let [dbRecord (DatabaseRecord.)]
-                 (.setDatabaseName dbRecord "jepsen")
-                 (let [op (CreateDatabaseOperation. dbRecord 5)]
-                   (.send (.server (.maintenance store)) op)))
-
-               (println "CREATED DATABASE")
-               )
-             (catch Exception e
-               (warn e "Error creating database"))
-             )
-
-           (assoc client :store store :node n)
-           )
-         )
+           (assoc client :store store :node n)))
 
   (setup! [this test]
           (println "setup!")
@@ -111,20 +94,26 @@
                            cmd (GetCompareExchangeValueOperation. Integer "jepsen")
                            result  (.send (.operations store) cmd)
                            ]
-                          (assoc op :type :ok :value (.getValue result)))
+                          (assoc op :type :ok :value
+                                          (if (nil? result)
+                                            nil
+                                            (.getValue result)
+                                            )
+
+                                 ))
 
                  :write (let
                           [store (:store this)
                            [k v] (:value op)
-                           cmd (PutCompareExchangeValueOperation. "jepsen" (rand-int 5) 0)
+                           cmd (PutCompareExchangeValueOperation. "jepsen" v 0)
                            result  (.send (.operations store) cmd)]
                           (assoc op :type :ok))
                  )
                (catch java.net.SocketTimeoutException e
                  (assoc op :type fail :value :timed-out))
 
-              (catch net.ravendb.client.exceptions.RavenException e
-                (assoc op :type fail :value :timed-out))
+              ;;(catch net.ravendb.client.exceptions.RavenException e
+              ;;  (assoc op :type fail :value :timed-out))
                )))
 
   (teardown! [this test]
@@ -165,7 +154,6 @@
              (str "--ServerUrl=" (server-url node))
              "--Security.UnsecuredAccessAllowed=PublicNetwork"
              "--License.Eula.Accepted=true"
-             ;; TODO add public server url
              "--Setup.Mode=None"
              (str "--ServerUrl.Tcp=" (tcp-url node)))
 
@@ -177,9 +165,29 @@
              (doseq [f (:nodes test)]
                (when (not= f (core/primary test))
                  (join-cluster test f)
-                 (Thread/sleep 3000))))
+                 (Thread/sleep 3000)))
 
-           (core/synchronize test))
+
+             (let [store  (DocumentStore. (into-array String [(server-url node)]) "jepsen")]
+               (.initialize store)
+
+               (try
+                 (let [dbRecord (DatabaseRecord.)]
+                   (.setDatabaseName dbRecord "jepsen")
+                   (let [op (CreateDatabaseOperation. dbRecord 5)]
+                     (.send (.server (.maintenance store)) op)))
+
+                 (catch Exception e
+                   (warn e "Error creating database"))
+                 )
+
+               )
+             )
+
+           (core/synchronize test)
+
+
+       )
 
    (teardown! [_ test node]
               (info node "tearing down RavenDB")
