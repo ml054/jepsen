@@ -94,13 +94,10 @@
                            cmd (GetCompareExchangeValueOperation. Integer "jepsen")
                            result  (.send (.operations store) cmd)
                            ]
-                          (assoc op :type :ok :value
-                                          (if (nil? result)
-                                            nil
-                                            (.getValue result)
-                                            )
 
-                                 ))
+                          (if (nil? result)
+                            (assoc op :type :fail :value nil)
+                            (assoc op :type :ok :value (.getValue result))))
 
                  :write (let
                           [store (:store this)
