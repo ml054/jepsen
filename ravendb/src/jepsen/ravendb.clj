@@ -23,16 +23,25 @@
   (:import [net.ravendb.client.documents DocumentStore]
            [net.ravendb.client.serverwide DatabaseRecord]
            [net.ravendb.client.documents.operations GetCompareExchangeValueOperation]
-           [net.ravendb.client.documents.operations.configuration GetClientConfigurationOperation]
-           [net.ravendb.client.documents.operations.configuration PutClientConfigurationOperation]
+           [net.ravendb.client.documents.operations.configuration
+            GetClientConfigurationOperation]
+           [net.ravendb.client.documents.operations.configuration
+            PutClientConfigurationOperation]
            [net.ravendb.client.documents.operations PutCompareExchangeValueOperation]
+           [net.ravendb.client.documents.commands.batches BatchCommand]
+           [net.ravendb.client.documents.commands PutDocumentCommand]
            [net.ravendb.client.serverwide ClientConfiguration]
+           [net.ravendb.client.documents.commands GetDocumentsCommand]
+           [net.ravendb.client.documents.commands.batches PutCommandDataWithJson]
+           [net.ravendb.client.extensions JsonExtensions]
            [net.ravendb.client.serverwide.operations CreateDatabaseOperation]))
 
 (def dir "/opt/ravendb")
 (def serverdir (str dir "/Server"))
 
-(def tarurl   "https://daily-builds.s3.amazonaws.com/RavenDB-4.0.0-nightly-20180124-0500-linux-x64.tar.bz2")
+(def tarurl
+  "https://daily-builds.s3.amazonaws.com/RavenDB-4.0.0-nightly-20180124-0500-linux-x64.tar.bz2")
+
 ;;(def tarurl "file:///root/raven.tar.bz2")
 (def binary "Raven.Server")
 (def logfile (str dir "/ravendb.log"))
@@ -71,7 +80,7 @@
   (c/exec :curl :-L :-i :-X :PUT :-o (str "/root/" node ".log") :-d "" url))
 
 
-(defrecord RachisClient [node store]
+(defrecord ConfigurationClient [node store]
   client/Client
 
   (open! [client test n]
@@ -79,9 +88,7 @@
            (.initialize store)
            (assoc client :store store :node n)))
 
-  (setup! [this test]
-          (println "setup!")
-          )
+  (setup! [this test])
 
   (invoke! [this test op]
            ; Reads are idempotent; if they fail we can always assume they didn't
@@ -92,54 +99,119 @@
                         :info)]
              (try
                (case (:f op)
-                 :read  (let
-                          [store (:store this)
-                           cmd (GetClientConfigurationOperation.)
-                           result  (.send (.maintenance store) cmd)
-                           r (.getConfiguration result)
-                           ]
+                 :read
+                 (let [store   (:store this)
+                       cmd     (GetClientConfigurationOperation.)
+                       result  (.send (.maintenance store) cmd)
+                       r       (.getConfiguration result)]
 
-                          (if (nil? r)
-                            (assoc op :type :fail, :value nil)
-                            ;;(assoc op :type :ok, :value (rand-int 5))
-                            (assoc op :type :ok, :value (.getMaxNumberOfRequestsPerSession r))
-                            ))
+                   (if (nil? r)
+                     (assoc op :type :fail, :error :null-read)
+                     (assoc op :type :ok, :value (.getMaxNumberOfRequestsPerSession r))))
 
-                 :write (let
-                          [store (:store this)
-                           [k v] (:value op)
-                           conf (ClientConfiguration.)
-                           ]
+
+                 :write (let [store (:store this)
+                              [k v] (:value op)
+                              conf  (ClientConfiguration.)]
                           (.setMaxNumberOfRequestsPerSession conf v)
 
                           (.send (.maintenance store) (PutClientConfigurationOperation. conf))
 
-                          (assoc op :type :ok))
-                 )
+                          (assoc op :type :ok)))
                (catch java.net.SocketTimeoutException e
                  (assoc op :type fail :error :timed-out))
 
-              (catch net.ravendb.client.exceptions.ConcurrencyException e
-                (assoc op :type fail :error :concurrency))
+               (catch net.ravendb.client.exceptions.ConcurrencyException e
+                 (assoc op :type fail :error :concurrency))
 
-              (catch Exception e
-                (assoc op :type fail :error (.getMessage e))
-                )
-               )))
+               (catch Exception e
+                 (assoc op :type fail :error (.getMessage e))))))
 
   (teardown! [this test]
-             (.close (:store this))
-             )
+             (.close (:store this)))
 
-  (close! [client test]
-          ))
+  (close! [client test]))
+
+(defrecord DocumentClient [node store]
+  client/Client
+
+  (open! [client test n]
+         (let [store  (DocumentStore. (into-array String [(server-url n)]) "jepsen")]
+           (.initialize store)
+           (assoc client :store store :node n)))
+
+  (setup! [this test])
+
+  (invoke! [this test op]
+           ; Reads are idempotent; if they fail we can always assume they didn't
+           ; happen in the history, and reduce the number of hung processes, which
+           ; makes the knossos search more efficient
+           (let [fail (if (= :read (:f op))
+                        :fail
+                        :info)]
+             (try
+               (case (:f op)
+                 :read
+
+                 (let [store   (:store this)
+                       readCmd (GetDocumentsCommand. "jepsen" nil false)]
+
+                   (.execute (.getRequestExecutor store) readCmd)
+                   (let [r (.getResult readCmd)
+                         rr (.getResults r)
+                         n1 (.get rr 0)
+                         max (.get n1 "maxNumberOfRequestsPerSession")
+                         textValue (.asInt max)
+                         ]
+
+                     (assoc op :type :ok, :value textValue)
+
+                     ))
+
+                 :write
+                 (let [store  (:store this)
+                       [k v]  (:value op)
+                       mapper (JsonExtensions/getDefaultEntityMapper)
+                       conf   (ClientConfiguration.)]
+
+                   (.setMaxNumberOfRequestsPerSession conf v)
+
+                   (let [json     (.valueToTree mapper conf)
+                         cmd      (PutCommandDataWithJson. "jepsen" nil json)
+                         batchCmd (BatchCommand. (.getConventions store) (java.util.ArrayList. [cmd]))]
+
+                     ;;store1.getRequestExecutor().execute();
+                     (.execute (.getRequestExecutor store) batchCmd)
+                     (assoc op :type :ok))))
+               (catch java.net.SocketTimeoutException e
+                 (assoc op :type fail :error :timed-out))
+
+               (catch net.ravendb.client.exceptions.ConcurrencyException e
+                 (assoc op :type fail :error :concurrency))
+
+               (catch Exception e
+                 (assoc op :type fail :error (.getMessage e))))
+             ))
 
 
+  (teardown! [this test]
+             (.close (:store this)))
 
-(defn client
+  (close! [client test])
+
+  )
+
+
+(defn document-client
   "A client for RavenDB"
   [conn]
-  (RachisClient. conn nil))
+  (DocumentClient. conn nil))
+
+
+(defn config-client
+  "A client for RavenDB"
+  [conn]
+  (ConfigurationClient. conn nil))
 
 (defn db
   "RavenDB database."
@@ -189,23 +261,16 @@
                      (.send (.server (.maintenance store)) op)))
 
                  (catch Exception e
-                   (warn e "Error creating database"))
-                 )
+                   (warn e "Error creating database")))))
 
-               )
-             )
-
-           (core/synchronize test)
-
-
-       )
+           (Thread/sleep 3000)
+           (core/synchronize test))
 
    (teardown! [_ test node]
               (info node "tearing down RavenDB")
               (cu/stop-daemon! binary pidfile)
               (c/su
-               (c/exec :rm :-rf dir))
-              )
+               (c/exec :rm :-rf dir)))
 
    db/LogFiles
    (log-files [_ test node]
@@ -220,9 +285,9 @@
          {:name      "ravendb"
           :os        debian/os
           :db        (db)
-          :client    (client nil)
+          :client    (config-client nil) ;; document-client or config-client
           :nemesis   (nemesis/partition-random-halves)
-          :model     (model/cas-register)
+          :model     (model/register)
           :checker   (checker/compose
                       {:perf  (checker/perf)
                        :indep (independent/checker
