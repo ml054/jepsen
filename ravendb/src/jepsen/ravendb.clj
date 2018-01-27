@@ -55,10 +55,21 @@
   [node port]
   (str "http://" (name node) ":" port))
 
+(defn node-port
+  "Port per given node"
+  [node]
+  (case node
+    "n1" 8091
+    "n2" 8092
+    "n3" 8093
+    "n4" 8094
+    "n5" 8095)
+  )
+
 (defn server-url
   "The HTTP url clients use to talk to a node."
   [node]
-  (node-url node 8080))
+  (node-url node (node-port node)))
 
 (defn tcp-url
   "The TCP url clients use to talk to a node."
@@ -285,31 +296,24 @@
          {:name      "ravendb"
           :os        debian/os
           :db        (db)
-          :client    (config-client nil) ;; document-client or config-client
+          ;:client    (config-client nil) ;; document-client or config-client
           :nemesis   (nemesis/partition-random-halves)
           :model     (model/register)
-          :checker   (checker/compose
-                      {:perf  (checker/perf)
-                       :indep (independent/checker
-                               (checker/compose
-                                {:timeline (timeline/html)
-                                 :linear   (checker/linearizable)}))})
+          ;;:checker   (checker/compose
+          ;;            {:perf  (checker/perf)
+          ;;             :indep (independent/checker
+          ;;                     (checker/compose
+          ;;                      {:timeline (timeline/html)
+          ;;                       :linear   (checker/linearizable)}))})
           :generator (->>
-                      (independent/concurrent-generator
-                       10
-                       (range)
-                       (fn [k]
-                         (->> (gen/mix [r w])
-                              (gen/stagger 1/30)
-                              (gen/limit 300))))
                       (gen/nemesis
                        (gen/seq
                         (cycle
-                         [(gen/sleep 5)
+                         [(gen/sleep 30)
                           {:type :info, :f :start}
-                          (gen/sleep 5)
+                          (gen/sleep 20)
                           {:type :info, :f :stop}])))
-                      (gen/time-limit (:time-limit opts)))}
+                      (gen/time-limit 7200))}
          opts))
 
 (defn -main
