@@ -6,4 +6,4 @@
   :jvm-opts ["-Dcom.sun.management.jmxremote"]
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [jepsen "0.1.7-SNAPSHOT"]
-                 [net.ravendb/ravendb-client "4.0.0-rc1"]])
+                 [net.ravendb/ravendb "4.0.0"]])
